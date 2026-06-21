@@ -125,10 +125,20 @@ static int write_snapshot_atomic(const LaneData lanes[], long cycle)
     fflush(f);          /* push C buffers to the OS ...            */
     fclose(f);          /* ... and close before renaming.          */
 
+#ifdef _WIN32
+    /* MoveFileExA with MOVEFILE_REPLACE_EXISTING atomically replaces the
+       destination on NTFS.  MSVCRT rename() fails when the target exists,
+       which is the root cause of the data-desync bug on Windows. */
+    if (!MoveFileExA(SENSOR_TMP, SENSOR_FILE, MOVEFILE_REPLACE_EXISTING)) {
+        fprintf(stderr, "sensor_sim: MoveFileEx error %lu\n", GetLastError());
+        return 0;
+    }
+#else
     if (rename(SENSOR_TMP, SENSOR_FILE) != 0) {  /* the atomic step */
         perror("sensor_sim: rename");
         return 0;
     }
+#endif
     return 1;
 }
 
