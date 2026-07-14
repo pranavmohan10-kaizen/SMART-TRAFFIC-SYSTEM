@@ -1,5 +1,25 @@
-/live_sensor_data.txt
-/live_sensor_data.txt.tmp
-/sensor_sim.exe
-/traffic_engine.exe
-/traffic_log.txt
+# Compiled C binaries & objects
+*.exe
+*.o
+*.obj
+*.out
+
+# Node.js dependencies & runtime log files
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Application state & runtime data files
+live_sensor_data.txt
+live_sensor_data.txt.tmp
+sensor_control.txt
+sensor_control.txt.tmp
+traffic_state.json
+traffic_state.json.tmp
+traffic_log.txt
+
+# OS metadata
+.DS_Store
+Thumbs.db

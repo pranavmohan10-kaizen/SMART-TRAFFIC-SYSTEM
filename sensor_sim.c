@@ -32,12 +32,15 @@
  * ==========================================================================*/
 
 #include "traffic_system.h"
+#include <ctype.h>
 
 /* Probability (percent) that a fully-random cycle injects ONE emergency. */
 #define EMERGENCY_CHANCE_PCT   18
 
-/* Scenario kinds chosen by the demo injector. */
-typedef enum { SCN_RANDOM = 0, SCN_NIGHT, SCN_RUSH } Scenario;
+/* Scenario kinds chosen by the demo injector.
+ * SCN_MANUAL is set when the web frontend sends an INJECT/UPDATE command,
+ * and prevents auto-generation from overwriting the manually-set values. */
+typedef enum { SCN_RANDOM = 0, SCN_NIGHT, SCN_RUSH, SCN_MANUAL } Scenario;
 
 /* ----------------------------------------------------------------------------
  *  rnd_range : inclusive uniform integer in [lo, hi]
@@ -148,9 +151,10 @@ static int write_snapshot_atomic(const LaneData lanes[], long cycle)
 static const char *scenario_name(Scenario s)
 {
     switch (s) {
-        case SCN_NIGHT: return "QUIET / NIGHT";
-        case SCN_RUSH:  return "RUSH HOUR";
-        default:        return "RANDOM TRAFFIC";
+        case SCN_NIGHT:  return "QUIET / NIGHT";
+        case SCN_RUSH:   return "RUSH HOUR";
+        case SCN_MANUAL: return "MANUAL OVERRIDE";
+        default:         return "RANDOM TRAFFIC";
     }
 }
 
@@ -196,6 +200,11 @@ static void render_sensor_panel(const LaneData lanes[], long cycle, Scenario scn
 
 /* ============================================================================
  *  main : the infinite sensor stream
+ *
+ *  Extended for web frontend: instead of a plain sleep_seconds() between
+ *  sensor updates, the loop wakes every 100 ms to check sensor_control.txt
+ *  for commands written by the Node.js server (SCENARIO, INJECT, UPDATE).
+ *  The 30-second sensor update cadence is fully preserved.
  * ==========================================================================*/
 int main(void)
 {
@@ -205,19 +214,119 @@ int main(void)
     LaneData lanes[NUM_LANES];
     long cycle = 0;
 
-    for (;;) {
-        /* --- pick a scenario for this cycle (demo injector) --------------- */
+    /* Write the very first snapshot immediately so the engine doesn't wait. */
+    {
         int roll = rnd_range(0, 99);
         Scenario scn = (roll < 15) ? SCN_NIGHT
                      : (roll < 30) ? SCN_RUSH
                                    : SCN_RANDOM;
-
+        for (int i = 0; i < NUM_LANES; i++) lanes[i].name = LANE_NAMES[i];
         generate_snapshot(lanes, scn);
         write_snapshot_atomic(lanes, cycle);
         render_sensor_panel(lanes, cycle, scn);
-
         cycle++;
-        sleep_seconds(SENSOR_UPDATE_SECS);
+    }
+
+    Scenario scn = SCN_RANDOM;
+
+    for (;;) {
+        /* --- sleep SENSOR_UPDATE_SECS but poll every 100 ms for commands -- */
+        int sleep_ticks = SENSOR_UPDATE_SECS * 10; /* 30 s -> 300 x 100 ms  */
+        int cmd_received = 0;
+
+        for (int t = 0; t < sleep_ticks; t++) {
+            sleep_ms(100);
+
+            /* Try to read and process a command from the web frontend. */
+            FILE *cf = fopen("sensor_control.txt", "r");
+            if (!cf) continue;
+
+            char cmd_line[256] = {0};
+            if (!fgets(cmd_line, sizeof cmd_line, cf)) { fclose(cf); continue; }
+            fclose(cf);
+            remove("sensor_control.txt"); /* consume it */
+
+            char cmd[32] = {0};
+            if (sscanf(cmd_line, "%31s", cmd) != 1) continue;
+
+            if (strcmp(cmd, "SCENARIO") == 0) {
+                /* SCENARIO NIGHT | RUSH | RANDOM | MANUAL */
+                char scn_name[32] = {0};
+                if (sscanf(cmd_line, "SCENARIO %31s", scn_name) == 1) {
+                    if      (strcmp(scn_name, "NIGHT")  == 0) scn = SCN_NIGHT;
+                    else if (strcmp(scn_name, "RUSH")   == 0) scn = SCN_RUSH;
+                    else if (strcmp(scn_name, "RANDOM") == 0) scn = SCN_RANDOM;
+                    else if (strcmp(scn_name, "MANUAL") == 0) scn = SCN_MANUAL;
+                    if (scn != SCN_MANUAL) generate_snapshot(lanes, scn);
+                    write_snapshot_atomic(lanes, cycle);
+                    render_sensor_panel(lanes, cycle, scn);
+                    cycle++;
+                    cmd_received = 1;
+                    break; /* reset the 30-s wait */
+                }
+
+            } else if (strcmp(cmd, "INJECT") == 0) {
+                /* INJECT <lane> - set emergency flag on the named lane */
+                char lane_char;
+                if (sscanf(cmd_line, "INJECT %c", &lane_char) == 1) {
+                    lane_char = (char)toupper((unsigned char)lane_char);
+                    for (int i = 0; i < NUM_LANES; i++) {
+                        if (LANE_NAMES[i] == lane_char)
+                            lanes[i].emergency = 1;
+                    }
+                    scn = SCN_MANUAL;
+                    write_snapshot_atomic(lanes, cycle);
+                    render_sensor_panel(lanes, cycle, scn);
+                    cycle++;
+                    cmd_received = 1;
+                    break;
+                }
+
+            } else if (strcmp(cmd, "UPDATE") == 0) {
+                /* UPDATE <lane> <vehicles> <pedestrians> <emergency> */
+                char lane_char;
+                int veh, ped, emg;
+                if (sscanf(cmd_line, "UPDATE %c %d %d %d",
+                           &lane_char, &veh, &ped, &emg) == 4) {
+                    lane_char = (char)toupper((unsigned char)lane_char);
+                    for (int i = 0; i < NUM_LANES; i++) {
+                        if (LANE_NAMES[i] == lane_char) {
+                            lanes[i].vehicles    = (veh < 0) ? 0 : (veh > VEH_MAX) ? VEH_MAX : veh;
+                            lanes[i].pedestrians = (ped < 0) ? 0 : (ped > PED_MAX) ? PED_MAX : ped;
+                            lanes[i].emergency   = emg ? 1 : 0;
+                        }
+                    }
+                    scn = SCN_MANUAL;
+                    write_snapshot_atomic(lanes, cycle);
+                    render_sensor_panel(lanes, cycle, scn);
+                    cycle++;
+                    cmd_received = 1;
+                    break;
+                } else {
+                    fprintf(stderr, "\nsensor_sim: Failed to parse UPDATE command line: %s\n", cmd_line);
+                    fflush(stderr);
+                }
+            } else {
+                fprintf(stderr, "\nsensor_sim: Unknown command keyword: %s\n", cmd);
+                fflush(stderr);
+            }
+        } /* end 100-ms polling loop */
+
+        /* --- if no command arrived: pick next auto-scenario and write ------ */
+        if (!cmd_received) {
+            if (scn != SCN_MANUAL) {
+                int roll = rnd_range(0, 99);
+                scn = (roll < 15) ? SCN_NIGHT
+                    : (roll < 30) ? SCN_RUSH
+                                  : SCN_RANDOM;
+                generate_snapshot(lanes, scn);
+            }
+            /* In MANUAL mode we re-write the same lanes so the engine re-reads
+             * and re-plans (in case it missed the initial write). */
+            write_snapshot_atomic(lanes, cycle);
+            render_sensor_panel(lanes, cycle, scn);
+            cycle++;
+        }
     }
     return 0; /* unreachable */
 }

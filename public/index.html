@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Based Smart Traffic Management System</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Grotesk:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Splash Waiting Screen -->
+    <div id="waiting-screen" class="splash-overlay">
+        <div class="splash-card">
+            <div class="spinner"></div>
+            <h1>Awaiting Sensor Feed...</h1>
+            <p>Please ensure both C programs are running in their terminals:</p>
+            <div class="commands-box">
+                <code>.\sensor_sim</code>
+                <code>.\traffic_engine</code>
+            </div>
+            <p class="small">The web dashboard will connect automatically once data is detected.</p>
+        </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="brand">
+                <div class="traffic-light-icon">
+                    <span class="dot red"></span>
+                    <span class="dot yellow"></span>
+                    <span class="dot green"></span>
+                </div>
+                <div>
+                    <h1>Smart City Traffic Control</h1>
+                    <p class="subtitle">Deterministic Decision-Tree AI Engine</p>
+                </div>
+            </div>
+            
+            <div class="system-stats">
+                <div class="stat-card">
+                    <span class="stat-label">System Mode</span>
+                    <span id="stat-mode" class="stat-value text-green">NORMAL</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Active Phase</span>
+                    <span id="stat-phase" class="stat-value">GREEN</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Time Remaining</span>
+                    <div class="progress-container">
+                        <span id="stat-timer" class="stat-value timer-val">00/00</span>
+                        <div class="progress-bar-bg">
+                            <div id="stat-progress" class="progress-bar" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Simulation Cycle</span>
+                    <span id="stat-cycle" class="stat-value">#0</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Body Grid -->
+        <div class="dashboard-grid">
+            <!-- Left Pane: Radial Intersection Diagram -->
+            <section class="panel intersection-panel">
+                <div class="panel-header">
+                    <h2>Live Intersection Status</h2>
+                    <span class="badge">Click lane to edit metrics</span>
+                </div>
+                <div class="intersection-container">
+                    <div class="junction-center">
+                        <span id="active-lane-name">--</span>
+                        <span class="center-label">ACTIVE</span>
+                    </div>
+
+                    <!-- Roads A to F -->
+                    <div class="road road-a" onclick="openOverrideModal('A')">
+                        <div class="road-body">
+                            <span class="road-label">Lane A</span>
+                            <div class="siren-alert" id="siren-A">🚨</div>
+                            <div class="lane-stats">
+                                <span class="badge vehicles-badge" id="veh-A">0 Cars</span>
+                                <span class="badge peds-badge" id="ped-A">0 Peds</span>
+                            </div>
+                            <div class="controls-status">
+                                <div class="traffic-light" id="light-A">
+                                    <div class="bulb red"></div>
+                                    <div class="bulb yellow"></div>
+                                    <div class="bulb green"></div>
+                                </div>
+                                <div class="walk-sign" id="walk-A">DONT WALK</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="road road-b" onclick="openOverrideModal('B')">
+                        <div class="road-body">
+                            <span class="road-label">Lane B</span>
+                            <div class="siren-alert" id="siren-B">🚨</div>
+                            <div class="lane-stats">
+                                <span class="badge vehicles-badge" id="veh-B">0 Cars</span>
+                                <span class="badge peds-badge" id="ped-B">0 Peds</span>
+                            </div>
+                            <div class="controls-status">
+                                <div class="traffic-light" id="light-B">
+                                    <div class="bulb red"></div>
+                                    <div class="bulb yellow"></div>
+                                    <div class="bulb green"></div>
+                                </div>
+                                <div class="walk-sign" id="walk-B">DONT WALK</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="road road-c" onclick="openOverrideModal('C')">
+                        <div class="road-body">
+                            <span class="road-label">Lane C</span>
+                            <div class="siren-alert" id="siren-C">🚨</div>
+                            <div class="lane-stats">
+                                <span class="badge vehicles-badge" id="veh-C">0 Cars</span>
+                                <span class="badge peds-badge" id="ped-C">0 Peds</span>
+                            </div>
+                            <div class="controls-status">
+                                <div class="traffic-light" id="light-C">
+                                    <div class="bulb red"></div>
+                                    <div class="bulb yellow"></div>
+                                    <div class="bulb green"></div>
+                                </div>
+                                <div class="walk-sign" id="walk-C">DONT WALK</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="road road-d" onclick="openOverrideModal('D')">
+                        <div class="road-body">
+                            <span class="road-label">Lane D</span>
+                            <div class="siren-alert" id="siren-D">🚨</div>
+                            <div class="lane-stats">
+                                <span class="badge vehicles-badge" id="veh-D">0 Cars</span>
+                                <span class="badge peds-badge" id="ped-D">0 Peds</span>
+                            </div>
+                            <div class="controls-status">
+                                <div class="traffic-light" id="light-D">
+                                    <div class="bulb red"></div>
+                                    <div class="bulb yellow"></div>
+                                    <div class="bulb green"></div>
+                                </div>
+                                <div class="walk-sign" id="walk-D">DONT WALK</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="road road-e" onclick="openOverrideModal('E')">
+                        <div class="road-body">
+                            <span class="road-label">Lane E</span>
+                            <div class="siren-alert" id="siren-E">🚨</div>
+                            <div class="lane-stats">
+                                <span class="badge vehicles-badge" id="veh-E">0 Cars</span>
+                                <span class="badge peds-badge" id="ped-E">0 Peds</span>
+                            </div>
+                            <div class="controls-status">
+                                <div class="traffic-light" id="light-E">
+                                    <div class="bulb red"></div>
+                                    <div class="bulb yellow"></div>
+                                    <div class="bulb green"></div>
+                                </div>
+                                <div class="walk-sign" id="walk-E">DONT WALK</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="road road-f" onclick="openOverrideModal('F')">
+                        <div class="road-body">
+                            <span class="road-label">Lane F</span>
+                            <div class="siren-alert" id="siren-F">🚨</div>
+                            <div class="lane-stats">
+                                <span class="badge vehicles-badge" id="veh-F">0 Cars</span>
+                                <span class="badge peds-badge" id="ped-F">0 Peds</span>
+                            </div>
+                            <div class="controls-status">
+                                <div class="traffic-light" id="light-F">
+                                    <div class="bulb red"></div>
+                                    <div class="bulb yellow"></div>
+                                    <div class="bulb green"></div>
+                                </div>
+                                <div class="walk-sign" id="walk-F">DONT WALK</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Pane: Sidebar Controls & Feed -->
+            <section class="sidebar-pane">
+                <!-- Simulation Control Panel -->
+                <div class="panel control-panel">
+                    <h2>Simulation Controls</h2>
+                    <div class="control-buttons">
+                        <button class="btn" id="btn-scn-random" onclick="setScenario('RANDOM')">Random Traffic</button>
+                        <button class="btn" id="btn-scn-night" onclick="setScenario('NIGHT')">Quiet Night Mode</button>
+                        <button class="btn" id="btn-scn-rush" onclick="setScenario('RUSH')">Rush Hour</button>
+                        <button class="btn" id="btn-scn-manual" onclick="setScenario('MANUAL')">Manual Override</button>
+                    </div>
+                    <div class="scenario-status">
+                        <span>Active Strategy:</span>
+                        <strong id="active-scenario-name" class="text-yellow">RANDOM TRAFFIC</strong>
+                    </div>
+                </div>
+
+                <!-- Priority Queue Panel -->
+                <div class="panel priority-panel">
+                    <h2>Priority Queue</h2>
+                    <div id="priority-list" class="priority-list">
+                        <!-- Queue items dynamically injected -->
+                    </div>
+                </div>
+
+                <!-- Live Decision Feed -->
+                <div class="panel feed-panel">
+                    <h2>Live Decision Feed</h2>
+                    <div id="feed-messages" class="feed-container">
+                        <!-- Feed messages dynamically injected -->
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Audit Log Terminal -->
+        <section class="panel log-panel">
+            <div class="panel-header">
+                <h2>Audit Log Stream (traffic_log.txt)</h2>
+                <button class="btn btn-sm" onclick="refreshLogs()">Force Refresh</button>
+            </div>
+            <div id="log-terminal" class="terminal-view">
+                <!-- Logs dynamically injected -->
+            </div>
+        </section>
+    </div>
+
+    <!-- Edit Lane Override Modal -->
+    <div id="override-modal" class="modal-overlay" onclick="closeOverrideModal(event)">
+        <div class="modal-card" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>Lane <span id="modal-lane-name">A</span> Configuration</h3>
+                <button class="close-btn" onclick="closeOverrideModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">Note: Editing metrics will automatically switch the simulator to <strong>Manual Override</strong> mode.</p>
+                
+                <div class="form-group">
+                    <label for="input-vehicles">Vehicle Density (0 - 200)</label>
+                    <div class="range-container">
+                        <input type="range" id="input-vehicles" min="0" max="200" value="10" oninput="updateRangeVal('vehicles')">
+                        <span id="val-vehicles" class="range-val">10</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="input-pedestrians">Pedestrian Count (0 - 50)</label>
+                    <div class="range-container">
+                        <input type="range" id="input-pedestrians" min="0" max="50" value="2" oninput="updateRangeVal('pedestrians')">
+                        <span id="val-pedestrians" class="range-val">2</span>
+                    </div>
+                </div>
+
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="input-emergency">
+                    <label for="input-emergency">🚨 Emergency Vehicle Present</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeOverrideModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitOverride()">Apply Overrides</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

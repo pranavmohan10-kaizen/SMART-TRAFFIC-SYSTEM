@@ -123,7 +123,7 @@ static const char LANE_NAMES[NUM_LANES] = { 'A', 'B', 'C', 'D', 'E', 'F' };
  *  live examiner is not forced to wait a literal 65 seconds.
  *      Set SIM_TICK_MS = 1000 for true real-time operation.
  * ==========================================================================*/
-#define SIM_TICK_MS          3000  /* wall-clock ms per simulated second  */
+#define SIM_TICK_MS          1000  /* wall-clock ms per simulated second  */
 #define SENSOR_UPDATE_SECS   30       /* sensor_sim refresh period (real s)  */
 
 #define EMERGENCY_GREEN      12         /* GREEN held for a priority vehicle   */

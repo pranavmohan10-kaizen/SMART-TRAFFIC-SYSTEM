@@ -349,6 +349,7 @@ static void refresh_counts(Plan *p)
         L->ped_class   = classify_ped(L->pedestrians);
         L->walk_time   = walk_for_ped(L->ped_class);
     }
+    bubble_sort_by_density(p->order, p->lanes);
 }
 
 /* --- COORDINATION LOGIC NODE ------------------------------------------------
@@ -371,6 +372,8 @@ static void apply_coordination(Plan *p)
  *  Reads SENSOR_FILE. Returns NUM_LANES only when a COMPLETE snapshot of all
  *  six lanes parsed cleanly (so partial/missing files are simply ignored).
  * ==========================================================================*/
+static long g_sensor_cycle = 0;
+
 static int read_sensors(LaneData out[])
 {
     FILE *f = fopen(SENSOR_FILE, "r");
@@ -383,7 +386,14 @@ static int read_sensors(LaneData out[])
     while (fgets(line, sizeof line, f)) {
         char *q = line;
         while (*q == ' ' || *q == '\t') q++;
-        if (*q == '#' || *q == '\n' || *q == '\0' || *q == '\r') continue;
+        if (*q == '#') {
+            long c_val = 0;
+            if (sscanf(q, "# cycle %ld", &c_val) == 1) {
+                g_sensor_cycle = c_val;
+            }
+            continue;
+        }
+        if (*q == '\n' || *q == '\0' || *q == '\r') continue;
 
         char L; int v, pd, em;
         if (sscanf(q, " %c %d %d %d", &L, &v, &pd, &em) == 4) {
@@ -689,9 +699,92 @@ static void render_feed(void)
     printf("  " FG_BCYAN "%s\n" C_RESET, bot);
 }
 
+/* Write the current controller state as JSON so the Node.js web server can
+ * serve it to the browser dashboard.  Uses atomic rename so the reader never
+ * sees a half-written file.  This is the ONLY change to traffic_engine for the
+ * frontend; all traffic logic is completely untouched. */
+static void write_state_json(const Plan *p, const char *phase, int remaining, int total)
+{
+    FILE *f = fopen("traffic_state.json.tmp", "w");
+    if (!f) return;
+
+    fprintf(f, "{\n");
+    fprintf(f, "  \"mode\": \"%s\",\n", mode_name(p->mode));
+    fprintf(f, "  \"cycle\": %ld,\n", p->cycle);
+    fprintf(f, "  \"active_lane\": %d,\n", p->active_lane);
+    fprintf(f, "  \"phase\": \"%s\",\n", phase);
+    fprintf(f, "  \"remaining_time\": %d,\n", remaining);
+    fprintf(f, "  \"total_time\": %d,\n", total);
+
+    fprintf(f, "  \"lanes\": [\n");
+    for (int i = 0; i < NUM_LANES; i++) {
+        const LanePlan *L = &p->lanes[i];
+        const char *sigStr = (L->signal == SIG_GREEN)  ? "GREEN"
+                           : (L->signal == SIG_YELLOW) ? "YELLOW"
+                                                       : "RED";
+        fprintf(f, "    {\n");
+        fprintf(f, "      \"name\": \"%c\",\n",       L->name);
+        fprintf(f, "      \"vehicles\": %d,\n",       L->vehicles);
+        fprintf(f, "      \"pedestrians\": %d,\n",    L->pedestrians);
+        fprintf(f, "      \"emergency\": %d,\n",      L->emergency);
+        fprintf(f, "      \"density\": \"%s\",\n",    density_name(L->density));
+        fprintf(f, "      \"ped_class\": \"%s\",\n",  ped_name(L->ped_class));
+        fprintf(f, "      \"green_time\": %d,\n",     L->green_time);
+        fprintf(f, "      \"walk_time\": %d,\n",      L->walk_time);
+        fprintf(f, "      \"signal\": \"%s\",\n",     sigStr);
+        fprintf(f, "      \"walk_active\": %d,\n",    L->walk_active);
+        fprintf(f, "      \"skipped\": %d\n",         L->skipped);
+        fprintf(f, "    }%s\n", (i == NUM_LANES - 1) ? "" : ",");
+    }
+    fprintf(f, "  ],\n");
+
+    fprintf(f, "  \"priority_queue\": [\n");
+    for (int i = 0; i < NUM_LANES; i++) {
+        const LanePlan *L = &p->lanes[p->order[i]];
+        fprintf(f, "    {\"name\": \"%c\", \"vehicles\": %d}%s\n",
+                L->name, L->vehicles, (i == NUM_LANES - 1) ? "" : ",");
+    }
+    fprintf(f, "  ],\n");
+
+    fprintf(f, "  \"live_feed\": [\n");
+    for (int i = 0; i < g_feed_count; i++) {
+        const char *c = g_feed[i].color;
+        const char *cName = "white";
+        if (c) {
+            if      (strcmp(c, FG_RED)    == 0 || strcmp(c, FG_BRED)    == 0) cName = "red";
+            else if (strcmp(c, FG_GREEN)  == 0 || strcmp(c, FG_BGREEN)  == 0) cName = "green";
+            else if (strcmp(c, FG_YELLOW) == 0 || strcmp(c, FG_BYELLOW) == 0) cName = "yellow";
+            else if (strcmp(c, FG_BLUE)   == 0 || strcmp(c, FG_BBLUE)   == 0) cName = "blue";
+            else if (strcmp(c, FG_CYAN)   == 0 || strcmp(c, FG_BCYAN)   == 0) cName = "cyan";
+            else if (strcmp(c, FG_DIM)    == 0)                                cName = "grey";
+        }
+        /* Escape quotes/backslashes; skip non-printable chars. */
+        char escaped[512] = {0};
+        int ei = 0;
+        for (int j = 0; g_feed[i].text[j] != '\0' && ei < 500; j++) {
+            unsigned char ch = (unsigned char)g_feed[i].text[j];
+            if (ch == '"' || ch == '\\') escaped[ei++] = '\\';
+            if (ch >= 32 && ch < 127)   escaped[ei++] = (char)ch;
+        }
+        fprintf(f, "    {\"text\": \"%s\", \"color\": \"%s\"}%s\n",
+                escaped, cName, (i == g_feed_count - 1) ? "" : ",");
+    }
+    fprintf(f, "  ]\n}\n");
+
+    fclose(f);
+
+#ifdef _WIN32
+    MoveFileExA("traffic_state.json.tmp", "traffic_state.json",
+                MOVEFILE_REPLACE_EXISTING);
+#else
+    rename("traffic_state.json.tmp", "traffic_state.json");
+#endif
+}
+
 /* The full repaint. */
 static void render(const Plan *p, const char *phase, int remaining, int total)
 {
+    write_state_json(p, phase, remaining, total);  /* update web dashboard    */
     fputs(CLEAR_SCREEN, stdout);
     render_banner();
     render_status(p, phase, remaining, total);
@@ -720,18 +813,35 @@ static void render_waiting(int ticks)
  *  Return value: 1 = pre-empted by emergency, 0 = ran to completion.
  * ==========================================================================*/
 
-/* Count down one signal phase, repainting each simulated second. Returns 1 if
- * an emergency appeared mid-phase (caller should bail out and re-plan). */
-static int countdown(Plan *p, const char *phase, int seconds, int watch_emergency)
+/* Count down one signal phase, repainting each simulated second.
+ *  watch_emergency : return 1 the moment an emergency vehicle appears.
+ *  watch_priority  : return 2 when a different lane jumps to the top of the
+ *                    priority queue mid-green (sensor data just updated). */
+static int countdown(Plan *p, const char *phase, int seconds,
+                     int watch_emergency, int watch_priority)
 {
     for (int rem = seconds; rem > 0 && g_running; rem--) {
         poll_sensors();                 /* refresh live data each tick      */
-        refresh_counts(p);              /* update tables without changing   */
-                                        /* the signals this phase set       */
+        refresh_counts(p);              /* update tables + re-sort p->order */
+
         if (watch_emergency && detect_emergency(g_live) >= 0) {
             notify("EMERGENCY", FG_BRED,
                    "Priority vehicle detected mid-cycle - pre-empting");
             return 1;
+        }
+        /* If we are in night mode but the sensor data indicates traffic has increased, pre-empt immediately. */
+        if (p->mode == MODE_NIGHT && !is_night_mode(g_live)) {
+            notify("SYSTEM", FG_BYELLOW,
+                   "Traffic detected - exiting Night Mode to adaptive control");
+            return 1;
+        }
+        /* If a different lane is now the top priority, pre-empt cleanly.  */
+        if (watch_priority && p->active_lane >= 0 &&
+            p->order[0] != p->active_lane) {
+            notify("SYSTEM", FG_BYELLOW,
+                   "Higher-priority lane %c detected - switching immediately",
+                   p->lanes[p->order[0]].name);
+            return 2;
         }
         render(p, phase, rem, seconds);
         sleep_ms(SIM_TICK_MS);
@@ -784,7 +894,7 @@ static void run_emergency(Plan *p)
     for (int i = 0; i < NUM_LANES; i++) p->lanes[i].signal = SIG_RED;
     p->active_lane = -1;
     apply_coordination(p);
-    countdown(p, "RED", ALLRED_CLEAR, 0);
+    countdown(p, "RED", ALLRED_CLEAR, 0, 0);
 }
 
 /* --- BRANCH 2 : NIGHT MODE (rapid cycle / dynamic skip) -------------------- */
@@ -805,7 +915,7 @@ static int run_night(Plan *p)
             apply_coordination(p);
             notify("SYSTEM", FG_BBLUE,
                    "Skipping empty Lane %c (0 vehicles)", p->lanes[idx].name);
-            if (countdown(p, "RED", ALLRED_CLEAR, 1)) return 1;
+            if (countdown(p, "RED", ALLRED_CLEAR, 1, 0)) return 1;
             p->lanes[idx].skipped = 0;
             continue;
         }
@@ -820,13 +930,13 @@ static int run_night(Plan *p)
         notify("NIGHT", FG_BGREEN,
                "Rapid GREEN Lane %c for %ds (%d veh)",
                p->lanes[idx].name, g, g_live[idx].vehicles);
-        if (countdown(p, "GREEN", g, 1)) return 1;
+        if (countdown(p, "GREEN", g, 1, 0)) return 1;
 
         /* No amber in night mode (per spec): a brief all-red only. */
         for (int i = 0; i < NUM_LANES; i++) p->lanes[i].signal = SIG_RED;
         p->active_lane = -1;
         apply_coordination(p);
-        if (countdown(p, "RED", ALLRED_CLEAR, 1)) return 1;
+        if (countdown(p, "RED", ALLRED_CLEAR, 1, 0)) return 1;
     }
     return 0;
 }
@@ -836,9 +946,11 @@ static int run_normal(Plan *p)
 {
     p->mode = MODE_NORMAL;
 
-    /* Serve lanes busiest-first (the bubble-sorted order). */
+    /* Serve lanes busiest-first. */
     for (int k = 0; k < NUM_LANES && g_running; k++) {
-        int idx = p->order[k];
+        /* Always pick the CURRENT top of the live priority queue, not a
+         * snapshot taken at cycle-start. */
+        int idx = p->order[0];
 
         /* GREEN for the served lane, RED for the rest -> coordination then
          * lets pedestrians WALK on every RED approach. */
@@ -852,18 +964,38 @@ static int run_normal(Plan *p)
                p->lanes[idx].name, p->lanes[idx].green_time,
                density_name(p->lanes[idx].density), p->lanes[idx].vehicles);
 
-        if (countdown(p, "GREEN", p->lanes[idx].green_time, 1)) return 1;
+        int cd = countdown(p, "GREEN", p->lanes[idx].green_time, 1, 1);
+        if (cd == 1) return 1;   /* emergency pre-empt */
+        if (cd == 2) {
+            /* A higher-priority lane emerged mid-green.
+             * Perform the safe amber + all-red clearance, then return so
+             * the main loop immediately re-plans with fresh data and
+             * starts the new top-priority lane. */
+            p->lanes[idx].signal = SIG_YELLOW;
+            apply_coordination(p);
+            if (countdown(p, "AMBER", YELLOW_TIME, 1, 0)) return 1;
+            p->lanes[idx].signal = SIG_RED;
+            p->active_lane = -1;
+            apply_coordination(p);
+            countdown(p, "RED", ALLRED_CLEAR, 1, 0);
+            return 1;   /* signal main loop to re-plan immediately */
+        }
 
         /* Fixed AMBER clearance (safe, non-blinking), lane still "active". */
         p->lanes[idx].signal = SIG_YELLOW;
         apply_coordination(p);
-        if (countdown(p, "AMBER", YELLOW_TIME, 1)) return 1;
+        if (countdown(p, "AMBER", YELLOW_TIME, 1, 0)) return 1;
 
         /* All-red gap before the next lane. */
         p->lanes[idx].signal = SIG_RED;
         p->active_lane = -1;
         apply_coordination(p);
-        if (countdown(p, "RED", ALLRED_CLEAR, 1)) return 1;
+        if (countdown(p, "RED", ALLRED_CLEAR, 1, 0)) return 1;
+        
+        /* After serving one lane to completion, re-read the top of the
+         * live queue.  If it changed, let the main loop re-plan (fresh
+         * build_plan) instead of continuing with a stale snapshot. */
+        if (p->order[0] != idx) return 1;
     }
     return 0;
 }
@@ -892,12 +1024,11 @@ int main(void)
     }
 
     Plan plan;
-    long cycle = 0;
 
     /* MAIN CONTROL LOOP: read -> decide (decision tree) -> drive -> repeat.  */
     while (g_running) {
         poll_sensors();                       /* freshest data           */
-        build_plan(g_live, &plan, cycle++);   /* run the decision tree   */
+        build_plan(g_live, &plan, g_sensor_cycle);   /* run the decision tree   */
         log_stats(&plan);                     /* persistent audit block  */
 
         switch (plan.mode) {                  /* dispatch the chosen branch */
